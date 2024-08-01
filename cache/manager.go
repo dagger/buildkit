@@ -21,6 +21,7 @@ import (
 	"github.com/moby/buildkit/identity"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/snapshot"
+	"github.com/moby/buildkit/solver/pb"
 	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/flightcontrol"
 	"github.com/moby/buildkit/util/progress"
@@ -49,6 +50,9 @@ type ManagerOpt struct {
 	Differ          diff.Comparer
 	MetadataStore   *metadata.Store
 	MountPoolRoot   string
+
+	// dagger-specific, see manager_dagger.go
+	VolumeSnapshotter CtdVolumeSnapshotter
 }
 
 type Accessor interface {
@@ -62,6 +66,9 @@ type Accessor interface {
 	IdentityMapping() *idtools.IdentityMapping
 	Merge(ctx context.Context, parents []ImmutableRef, pg progress.Controller, opts ...RefOption) (ImmutableRef, error)
 	Diff(ctx context.Context, lower, upper ImmutableRef, pg progress.Controller, opts ...RefOption) (ImmutableRef, error)
+
+	// Dagger-specific, see manager_dagger.go
+	GetOrInitVolume(ctx context.Context, id string, sharingMode pb.CacheSharingOpt, parent ImmutableRef) (MutableRef, error)
 }
 
 type Controller interface {
@@ -97,6 +104,9 @@ type cacheManager struct {
 
 	muPrune sync.Mutex // make sure parallel prune is not allowed so there will not be inconsistent results
 	unlazyG flightcontrol.Group[struct{}]
+
+	// dagger-specific, see manager_dagger.go
+	volumeSnapshotter VolumeSnapshotter
 }
 
 func NewManager(opt ManagerOpt) (Manager, error) {
@@ -110,6 +120,8 @@ func NewManager(opt ManagerOpt) (Manager, error) {
 		Differ:          opt.Differ,
 		MetadataStore:   opt.MetadataStore,
 		records:         make(map[string]*cacheRecord),
+
+		volumeSnapshotter: newVolumeSnapshotter(context.TODO(), opt.VolumeSnapshotter, opt.LeaseManager),
 	}
 
 	if err := cm.init(context.TODO()); err != nil {
@@ -444,7 +456,7 @@ func (cm *cacheManager) getRecord(ctx context.Context, id string, opts ...RefOpt
 			return rec, nil
 		} else if IsNotFound(err) {
 			// The equal mutable for this ref is not found, check to see if our snapshot exists
-			if _, statErr := cm.Snapshotter.Stat(ctx, md.getSnapshotID()); statErr != nil {
+			if _, statErr := cm.snapshotterFor(md).Stat(ctx, md.getSnapshotID()); statErr != nil {
 				// this ref's snapshot also doesn't exist, just remove this record
 				cm.MetadataStore.Clear(id)
 				return nil, errors.Wrap(errNotFound, id)
@@ -484,7 +496,7 @@ func (cm *cacheManager) getRecord(ctx context.Context, id string, opts ...RefOpt
 
 	if rec.mutable {
 		// If the record is mutable, then the snapshot must exist
-		if _, err := cm.Snapshotter.Stat(ctx, rec.ID()); err != nil {
+		if _, err := cm.snapshotterFor(md).Stat(ctx, rec.ID()); err != nil {
 			if !cerrdefs.IsNotFound(err) {
 				return nil, errors.Wrap(err, "failed to check mutable ref snapshot")
 			}

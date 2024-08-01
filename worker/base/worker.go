@@ -81,6 +81,9 @@ type WorkerOpt struct {
 	MetadataStore    *metadata.Store
 	MountPoolRoot    string
 	ResourceMonitor  *resources.Monitor
+
+	// dagger-specific
+	VolumeSnapshotter cache.CtdVolumeSnapshotter
 }
 
 // Worker is a local worker instance with dedicated snapshotter, cache, and so on.
@@ -111,6 +114,9 @@ func NewWorker(ctx context.Context, opt WorkerOpt) (*Worker, error) {
 		Differ:          opt.Differ,
 		MetadataStore:   opt.MetadataStore,
 		MountPoolRoot:   opt.MountPoolRoot,
+
+		// dagger-specific
+		VolumeSnapshotter: opt.VolumeSnapshotter,
 	})
 	if err != nil {
 		return nil, err
