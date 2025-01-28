@@ -2,7 +2,6 @@ package contentutil
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"time"
 
@@ -78,9 +77,6 @@ func (i *pushingIngester) Writer(ctx context.Context, opts ...content.WriterOpt)
 		release()
 		return nil, err
 	}
-	runtime.SetFinalizer(contentWriter, func(_ content.Writer) {
-		release()
-	})
 	return &writer{
 		Writer:           contentWriter,
 		contentWriterRef: wOpts.Ref,

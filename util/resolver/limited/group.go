@@ -3,7 +3,6 @@ package limited
 import (
 	"context"
 	"io"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -124,9 +123,6 @@ func (f *fetcher) Fetch(ctx context.Context, desc ocispecs.Descriptor) (io.ReadC
 		release()
 	}
 	rcw.release = closer
-	runtime.SetFinalizer(rcw, func(rc *readCloser) {
-		rc.close()
-	})
 
 	if s, ok := rc.(io.Seeker); ok {
 		return &readCloserSeeker{rcw, s}, nil

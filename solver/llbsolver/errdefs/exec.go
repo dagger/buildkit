@@ -2,10 +2,8 @@ package errdefs
 
 import (
 	"context"
-	"runtime"
 
 	"github.com/moby/buildkit/solver"
-	"github.com/moby/buildkit/util/bklog"
 )
 
 // ExecError will be returned when an error is encountered when evaluating an op.
@@ -74,14 +72,5 @@ func WithExecErrorWithContext(ctx context.Context, err error, inputs, mounts []s
 		Inputs: inputs,
 		Mounts: mounts,
 	}
-	runtime.SetFinalizer(ee, func(e *ExecError) {
-		if !e.OwnerBorrowed {
-			e.EachRef(func(r solver.Result) error {
-				bklog.G(ctx).Warn("leaked execError detected and released")
-				r.Release(context.TODO())
-				return nil
-			})
-		}
-	})
 	return ee
 }
