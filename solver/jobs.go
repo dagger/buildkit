@@ -59,7 +59,7 @@ type state struct {
 	clientVertex client.Vertex
 	origDigest   digest.Digest // original LLB digest. TODO: probably better to use string ID so this isn't needed
 
-	mu    sync.Mutex
+	mu    *sync.Mutex
 	op    *sharedOp
 	edges map[Index]*edge
 	opts  SolverOpt
@@ -70,16 +70,36 @@ type state struct {
 	solver    *Solver
 }
 
-func (s *state) SessionIterator() session.Iterator {
-	return s.sessionIterator()
+func (s *state) SessionGroup() *stateSessionGroup {
+	return &stateSessionGroup{
+		mu:           s.mu,
+		jobs:         s.jobs,
+		stateParents: s.parents,
+		solver:       s.solver,
+	}
 }
 
-func (s *state) sessionIterator() *sessionGroup {
-	return &sessionGroup{state: s, visited: map[string]struct{}{}}
+type stateSessionGroup struct {
+	mu           *sync.Mutex
+	jobs         map[*Job]struct{}
+	stateParents map[digest.Digest]struct{}
+	solver       *Solver
+}
+
+func (g *stateSessionGroup) SessionIterator() session.Iterator {
+	return g.sessionIterator()
+}
+
+func (g *stateSessionGroup) sessionIterator() *sessionGroup {
+	return &sessionGroup{
+		stateSessionGroup: g,
+		visited:           map[string]struct{}{},
+	}
 }
 
 type sessionGroup struct {
-	*state
+	*stateSessionGroup
+
 	visited map[string]struct{}
 	parents []session.Iterator
 	mode    int
@@ -104,7 +124,7 @@ func (g *sessionGroup) NextSession() string {
 	if g.mode == 1 {
 		parents := map[digest.Digest]struct{}{}
 		g.mu.Lock()
-		for p := range g.state.parents {
+		for p := range g.stateParents {
 			parents[p] = struct{}{}
 		}
 		g.mu.Unlock()
@@ -114,7 +134,7 @@ func (g *sessionGroup) NextSession() string {
 			pst, ok := g.solver.actives[p]
 			g.solver.mu.Unlock()
 			if ok {
-				gg := pst.sessionIterator()
+				gg := pst.SessionGroup().sessionIterator()
 				gg.visited = g.visited
 				g.parents = append(g.parents, gg)
 			}
@@ -280,7 +300,7 @@ func (sb *subBuilder) InContext(ctx context.Context, f func(context.Context, ses
 	if sb.mspan.Span != nil {
 		ctx = trace.ContextWithSpan(ctx, sb.mspan)
 	}
-	return f(ctx, sb.state)
+	return f(ctx, sb.state.SessionGroup())
 }
 
 func (sb *subBuilder) EachValue(ctx context.Context, key string, fn func(interface{}) error) error {
@@ -496,6 +516,8 @@ func (jl *Solver) loadUnlocked(ctx context.Context, v, parent Vertex, j *Job, ca
 
 	if !ok {
 		st = &state{
+			mu: &sync.Mutex{},
+
 			opts:         jl.opts,
 			jobs:         map[*Job]struct{}{},
 			parents:      map[digest.Digest]struct{}{},
@@ -939,7 +961,7 @@ func (s *sharedOp) CalcSlowCache(ctx context.Context, index Index, p PreprocessF
 			if st.mspan.Span != nil {
 				ctx2 = trace.ContextWithSpan(ctx2, st.mspan)
 			}
-			err = p(ctx2, res, st)
+			err = p(ctx2, res, st.SessionGroup())
 			if err != nil {
 				f = nil
 				ctx = ctx2
@@ -952,7 +974,7 @@ func (s *sharedOp) CalcSlowCache(ctx context.Context, index Index, p PreprocessF
 			if s.st.mspan.Span != nil {
 				ctx = trace.ContextWithSpan(ctx, s.st.mspan)
 			}
-			key, err = f(withAncestorCacheOpts(ctx, s.st), res, s.st)
+			key, err = f(withAncestorCacheOpts(ctx, s.st), res, s.st.SessionGroup())
 		}
 		if err != nil {
 			select {
@@ -1018,7 +1040,7 @@ func (s *sharedOp) CacheMap(ctx context.Context, index int) (resp *cacheMapResp,
 				notifyCompleted(retErr, false)
 			}()
 		}
-		res, done, err := op.CacheMap(ctx, s.st, len(s.cacheRes))
+		res, done, err := op.CacheMap(ctx, s.st.SessionGroup(), len(s.cacheRes))
 		complete := true
 		if err != nil {
 			select {
@@ -1097,7 +1119,7 @@ func (s *sharedOp) Exec(ctx context.Context, inputs []Result) (outputs []Result,
 			notifyCompleted(retErr, false)
 		}()
 
-		res, err := op.Exec(ctx, s.st, inputs)
+		res, err := op.Exec(ctx, s.st.SessionGroup(), inputs)
 		complete := true
 		if err != nil {
 			select {
