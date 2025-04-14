@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/moby/buildkit/util/bklog"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 )
@@ -107,11 +108,16 @@ func (sm *Manager) handleConn(ctx context.Context, conn net.Conn, opts map[strin
 	id := h.Get(headerSessionID)
 	sharedKey := h.Get(headerSessionSharedKey)
 
+	lg := bklog.G(ctx).WithField("session.id", id)
+	lg.Debug("buildkit session.Manager handleConn")
+
 	ctx, cc, err := grpcClientConn(ctx, conn)
 	if err != nil {
 		sm.mu.Unlock()
+		lg.WithError(err).Debug("buildkit session.Manager handleConn grpcClientConn failed")
 		return err
 	}
+	lg.Debug("buildkit session.Manager handleConn connected successfully")
 
 	c := &client{
 		Session: Session{
@@ -142,6 +148,7 @@ func (sm *Manager) handleConn(ctx context.Context, conn net.Conn, opts map[strin
 	conn.Close()
 	close(c.done)
 
+	lg.Debug("buildkit session.Manager handleConn done")
 	return nil
 }
 
