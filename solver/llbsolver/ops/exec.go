@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/containerd/platforms"
 	"github.com/moby/buildkit/cache"
@@ -30,6 +31,7 @@ import (
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -551,27 +553,37 @@ func (e *ExecOp) loadSecretEnv(ctx context.Context, g session.Group) ([]string, 
 		return nil, nil
 	}
 	out := make([]string, 0, len(secretenv))
+	eg, gctx := errgroup.WithContext(ctx)
+	var mu sync.Mutex
 	for _, sopt := range secretenv {
 		id := sopt.ID
-		if id == "" {
-			return nil, errors.Errorf("secret ID missing for %q environment variable", sopt.Name)
-		}
-		var dt []byte
-		var err error
-		err = e.sm.Any(ctx, g, func(ctx context.Context, _ string, caller session.Caller) error {
-			dt, err = secrets.GetSecret(ctx, caller, id)
-			if err != nil {
-				if errors.Is(err, secrets.ErrNotFound) && sopt.Optional {
-					return nil
+		eg.Go(func() error {
+			if id == "" {
+				return errors.Errorf("secret ID missing for %q environment variable", sopt.Name)
+			}
+			var dt []byte
+			var err error
+			err = e.sm.Any(gctx, g, func(ctx context.Context, _ string, caller session.Caller) error {
+				dt, err = secrets.GetSecret(ctx, caller, id)
+				if err != nil {
+					if errors.Is(err, secrets.ErrNotFound) && sopt.Optional {
+						return nil
+					}
+					return err
 				}
+				return nil
+			})
+			if err != nil {
 				return err
 			}
+			mu.Lock()
+			out = append(out, fmt.Sprintf("%s=%s", sopt.Name, string(dt)))
+			mu.Unlock()
 			return nil
 		})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, fmt.Sprintf("%s=%s", sopt.Name, string(dt)))
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
