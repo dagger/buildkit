@@ -382,7 +382,7 @@ func (mm *MountManager) MountableCache(ctx context.Context, m *pb.Mount, ref cac
 	if m.CacheOpt == nil {
 		return nil, errors.Errorf("missing cache mount options")
 	}
-	return mm.getRefCacheDir(ctx, ref, m.CacheOpt.ID, m, m.CacheOpt.Sharing, g)
+	return mm.cm.GetOrInitVolume(ctx, m.CacheOpt.ID, ref, m.CacheOpt.Sharing, g)
 }
 
 func (mm *MountManager) MountableTmpFS(m *pb.Mount) cache.Mountable {

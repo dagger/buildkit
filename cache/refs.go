@@ -300,7 +300,7 @@ func (cr *cacheRecord) isLazy(ctx context.Context) (bool, error) {
 	}
 
 	// If the snapshot is a remote snapshot, this layer is lazy.
-	if info, err := cr.cm.Snapshotter.Stat(ctx, cr.getSnapshotID()); err == nil {
+	if info, err := cr.cm.snapshotterFor(cr.cacheMetadata).Stat(ctx, cr.getSnapshotID()); err == nil {
 		if _, ok := info.Labels["containerd.io/snapshot/remote"]; ok {
 			return true, nil
 		}
@@ -335,14 +335,16 @@ func (cr *cacheRecord) size(ctx context.Context) (int64, error) {
 			return s, nil
 		}
 		driverID := cr.getSnapshotID()
+		snapshotter := cr.cm.snapshotterFor(cr.cacheMetadata)
 		if cr.equalMutable != nil {
 			driverID = cr.equalMutable.getSnapshotID()
+			snapshotter = cr.cm.snapshotterFor(cr.equalMutable.cacheMetadata)
 		}
 		cr.mu.Unlock()
 		var usage snapshots.Usage
 		if !cr.getBlobOnly() {
 			var err error
-			usage, err = cr.cm.Snapshotter.Usage(ctx, driverID)
+			usage, err = snapshotter.Usage(ctx, driverID)
 			if err != nil {
 				cr.mu.Lock()
 				isDead := cr.isDead()
@@ -412,14 +414,14 @@ func (cr *cacheRecord) mount(ctx context.Context) (_ snapshot.Mountable, rerr er
 		}()
 		if err := cr.cm.LeaseManager.AddResource(ctx, leases.Lease{ID: cr.viewLeaseID()}, leases.Resource{
 			ID:   mountSnapshotID,
-			Type: "snapshots/" + cr.cm.Snapshotter.Name(),
+			Type: "snapshots/" + cr.cm.snapshotterFor(cr.cacheMetadata).Name(),
 		}); err != nil && !cerrdefs.IsAlreadyExists(err) {
 			return nil, err
 		}
 		// Return the mount direct from View rather than setting it using the Mounts call below.
 		// The two are equivalent for containerd snapshotters but the moby snapshotter requires
 		// the use of the mountable returned by View in this case.
-		mnts, err := cr.cm.Snapshotter.View(ctx, mountSnapshotID, cr.getSnapshotID())
+		mnts, err := cr.cm.snapshotterFor(cr.cacheMetadata).View(ctx, mountSnapshotID, cr.getSnapshotID())
 		if err != nil && !cerrdefs.IsAlreadyExists(err) {
 			return nil, err
 		}
@@ -429,8 +431,7 @@ func (cr *cacheRecord) mount(ctx context.Context) (_ snapshot.Mountable, rerr er
 	if cr.mountCache != nil {
 		return cr.mountCache, nil
 	}
-
-	mnts, err := cr.cm.Snapshotter.Mounts(ctx, mountSnapshotID)
+	mnts, err := cr.cm.snapshotterFor(cr.cacheMetadata).Mounts(ctx, mountSnapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -620,6 +621,9 @@ type mutableRef struct {
 	*cacheRecord
 	triggerLastUsed bool
 	descHandlers    DescHandlers
+
+	// dagger-specific
+	releaseFunc func() error
 }
 
 // hold ref lock before calling
@@ -972,7 +976,7 @@ func (sr *immutableRef) Mount(ctx context.Context, readonly bool, s session.Grou
 	}
 
 	var mnt snapshot.Mountable
-	if sr.cm.Snapshotter.Name() == "stargz" {
+	if sr.cm.snapshotterFor(sr.cacheMetadata).Name() == "stargz" {
 		if err := sr.withRemoteSnapshotLabelsStargzMode(ctx, s, func() {
 			mnt, rerr = sr.mount(ctx)
 		}); err != nil {
@@ -1004,7 +1008,7 @@ func (sr *immutableRef) Extract(ctx context.Context, s session.Group) (rerr erro
 		return nil
 	}
 
-	if sr.cm.Snapshotter.Name() == "stargz" {
+	if sr.cm.snapshotterFor(sr.cacheMetadata).Name() == "stargz" {
 		if err := sr.withRemoteSnapshotLabelsStargzMode(ctx, s, func() {
 			if rerr = sr.prepareRemoteSnapshotsStargzMode(ctx, s); rerr != nil {
 				return
@@ -1023,7 +1027,7 @@ func (sr *immutableRef) withRemoteSnapshotLabelsStargzMode(ctx context.Context, 
 	dhs := sr.descHandlers
 	for _, r := range sr.layerChain() {
 		r := r
-		info, err := r.cm.Snapshotter.Stat(ctx, r.getSnapshotID())
+		info, err := r.cm.snapshotterFor(sr.cacheMetadata).Stat(ctx, r.getSnapshotID())
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			return err
 		} else if cerrdefs.IsNotFound(err) {
@@ -1040,7 +1044,7 @@ func (sr *immutableRef) withRemoteSnapshotLabelsStargzMode(ctx context.Context, 
 		// For avoiding collosion among calls, keys of these tmp labels contain an unique ID.
 		flds, labels := makeTmpLabelsStargzMode(snapshots.FilterInheritedLabels(dh.SnapshotLabels), s)
 		info.Labels = labels
-		if _, err := r.cm.Snapshotter.Update(ctx, info, flds...); err != nil {
+		if _, err := r.cm.snapshotterFor(sr.cacheMetadata).Update(ctx, info, flds...); err != nil {
 			return errors.Wrapf(err, "failed to add tmp remote labels for remote snapshot")
 		}
 		defer func() {
@@ -1048,7 +1052,7 @@ func (sr *immutableRef) withRemoteSnapshotLabelsStargzMode(ctx context.Context, 
 			for k := range info.Labels {
 				info.Labels[k] = "" // Remove labels appended in this call
 			}
-			if _, err := r.cm.Snapshotter.Update(ctx, info, flds...); err != nil {
+			if _, err := r.cm.snapshotterFor(sr.cacheMetadata).Update(ctx, info, flds...); err != nil {
 				bklog.G(ctx).Warn(errors.Wrapf(err, "failed to remove tmp remote labels"))
 			}
 		}()
@@ -1067,7 +1071,7 @@ func (sr *immutableRef) prepareRemoteSnapshotsStargzMode(ctx context.Context, s 
 		for _, r := range sr.layerChain() {
 			r := r
 			snapshotID := r.getSnapshotID()
-			if _, err := r.cm.Snapshotter.Stat(ctx, snapshotID); err == nil {
+			if _, err := r.cm.snapshotterFor(sr.cacheMetadata).Stat(ctx, snapshotID); err == nil {
 				continue
 			}
 
@@ -1099,11 +1103,11 @@ func (sr *immutableRef) prepareRemoteSnapshotsStargzMode(ctx context.Context, s 
 			if r.layerParent != nil {
 				parentID = r.layerParent.getSnapshotID()
 			}
-			if err := r.cm.Snapshotter.Prepare(ctx, key, parentID, opts...); err != nil {
+			if err := r.cm.snapshotterFor(sr.cacheMetadata).Prepare(ctx, key, parentID, opts...); err != nil {
 				if cerrdefs.IsAlreadyExists(err) {
 					// Check if the targeting snapshot ID has been prepared as
 					// a remote snapshot in the snapshotter.
-					info, err := r.cm.Snapshotter.Stat(ctx, snapshotID)
+					info, err := r.cm.snapshotterFor(sr.cacheMetadata).Stat(ctx, snapshotID)
 					if err == nil { // usable as remote snapshot without unlazying.
 						defer func() {
 							ctx := context.WithoutCancel(ctx)
@@ -1120,7 +1124,7 @@ func (sr *immutableRef) prepareRemoteSnapshotsStargzMode(ctx context.Context, s 
 									WithField("name", info.Name).
 									Debug("snapshots exist but labels are nil")
 							}
-							if _, err := r.cm.Snapshotter.Update(ctx, info, tmpFields...); err != nil {
+							if _, err := r.cm.snapshotterFor(sr.cacheMetadata).Update(ctx, info, tmpFields...); err != nil {
 								bklog.G(ctx).Warn(errors.Wrapf(err,
 									"failed to remove tmp remote labels after prepare"))
 							}
@@ -1160,7 +1164,7 @@ func makeTmpLabelsStargzMode(labels map[string]string, s session.Group) (fields 
 
 func (sr *immutableRef) unlazy(ctx context.Context, dhs DescHandlers, pg progress.Controller, s session.Group, topLevel bool, ensureContentStore bool) error {
 	_, err := g.Do(ctx, sr.ID()+"-unlazy", func(ctx context.Context) (_ *leaseutil.LeaseRef, rerr error) {
-		if _, err := sr.cm.Snapshotter.Stat(ctx, sr.getSnapshotID()); err == nil {
+		if _, err := sr.cm.snapshotterFor(sr.cacheMetadata).Stat(ctx, sr.getSnapshotID()); err == nil {
 			if !ensureContentStore {
 				return nil, nil
 			}
@@ -1239,7 +1243,7 @@ func (sr *immutableRef) unlazyDiffMerge(ctx context.Context, dhs DescHandlers, p
 		defer statusDone()
 	}
 
-	return sr.cm.Snapshotter.Merge(ctx, sr.getSnapshotID(), diffs)
+	return sr.cm.snapshotterFor(sr.cacheMetadata).Merge(ctx, sr.getSnapshotID(), diffs)
 }
 
 // should be called within sizeG.Do call for this ref's ID
@@ -1310,12 +1314,12 @@ func (sr *immutableRef) unlazyLayer(ctx context.Context, dhs DescHandlers, pg pr
 
 	key := fmt.Sprintf("extract-%s %s", identity.NewID(), sr.getChainID())
 
-	err = sr.cm.Snapshotter.Prepare(ctx, key, parentID)
+	err = sr.cm.snapshotterFor(sr.cacheMetadata).Prepare(ctx, key, parentID)
 	if err != nil {
 		return err
 	}
 
-	mountable, err := sr.cm.Snapshotter.Mounts(ctx, key)
+	mountable, err := sr.cm.snapshotterFor(sr.cacheMetadata).Mounts(ctx, key)
 	if err != nil {
 		return err
 	}
@@ -1332,7 +1336,7 @@ func (sr *immutableRef) unlazyLayer(ctx context.Context, dhs DescHandlers, pg pr
 	if err := unmount(); err != nil {
 		return err
 	}
-	if err := sr.cm.Snapshotter.Commit(ctx, sr.getSnapshotID(), key); err != nil {
+	if err := sr.cm.snapshotterFor(sr.cacheMetadata).Commit(ctx, sr.getSnapshotID(), key); err != nil {
 		if !errors.Is(err, cerrdefs.ErrAlreadyExists) {
 			return err
 		}
@@ -1430,13 +1434,13 @@ func (cr *cacheRecord) finalize(ctx context.Context) error {
 
 	if err := cr.cm.LeaseManager.AddResource(ctx, leases.Lease{ID: cr.ID()}, leases.Resource{
 		ID:   cr.getSnapshotID(),
-		Type: "snapshots/" + cr.cm.Snapshotter.Name(),
+		Type: "snapshots/" + cr.cm.snapshotterFor(cr.cacheMetadata).Name(),
 	}); err != nil {
 		cr.cm.LeaseManager.Delete(context.TODO(), leases.Lease{ID: cr.ID()})
 		return errors.Wrapf(err, "failed to add snapshot %s to lease", cr.getSnapshotID())
 	}
 
-	if err := cr.cm.Snapshotter.Commit(ctx, cr.getSnapshotID(), mutable.getSnapshotID()); err != nil {
+	if err := cr.cm.snapshotterFor(cr.cacheMetadata).Commit(ctx, cr.getSnapshotID(), mutable.getSnapshotID()); err != nil {
 		cr.cm.LeaseManager.Delete(context.TODO(), leases.Lease{ID: cr.ID()})
 		return errors.Wrapf(err, "failed to commit %s to %s during finalize", mutable.getSnapshotID(), cr.getSnapshotID())
 	}
@@ -1517,7 +1521,7 @@ func (sr *mutableRef) Mount(ctx context.Context, readonly bool, s session.Group)
 	}
 
 	var mnt snapshot.Mountable
-	if sr.cm.Snapshotter.Name() == "stargz" && sr.layerParent != nil {
+	if sr.cm.snapshotterFor(sr.cacheMetadata).Name() == "stargz" && sr.layerParent != nil {
 		if err := sr.layerParent.withRemoteSnapshotLabelsStargzMode(ctx, s, func() {
 			mnt, rerr = sr.mount(ctx)
 		}); err != nil {
@@ -1589,6 +1593,11 @@ func (sr *mutableRef) release(ctx context.Context) (rerr error) {
 		sr.updateLastUsed()
 		sr.triggerLastUsed = false
 	}
+
+	if sr.releaseFunc != nil {
+		return sr.releaseFunc()
+	}
+
 	return nil
 }
 
