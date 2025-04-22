@@ -168,6 +168,7 @@ func newVertex(dgst digest.Digest, op *pb.Op, opMeta *pb.OpMetadata, load func(d
 	opt := solver.VertexOptions{}
 	if opMeta != nil {
 		opt.IgnoreCache = opMeta.IgnoreCache
+		opt.SkipEdgeMerge = opMeta.SkipEdgeMerge
 		opt.Description = opMeta.Description
 		if opMeta.ExportCache != nil {
 			opt.ExportCache = &opMeta.ExportCache.Value
