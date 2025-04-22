@@ -564,6 +564,9 @@ func mergeMetadata(m1, m2 pb.OpMetadata) pb.OpMetadata {
 	if m2.IgnoreCache {
 		m1.IgnoreCache = true
 	}
+	if m2.SkipEdgeMerge {
+		m1.SkipEdgeMerge = true
+	}
 	if len(m2.Description) > 0 {
 		if m1.Description == nil {
 			m1.Description = make(map[string]string)
@@ -590,6 +593,10 @@ func mergeMetadata(m1, m2 pb.OpMetadata) pb.OpMetadata {
 
 var IgnoreCache = constraintsOptFunc(func(c *Constraints) {
 	c.Metadata.IgnoreCache = true
+})
+
+var SkipEdgeMerge = constraintsOptFunc(func(c *Constraints) {
+	c.Metadata.SkipEdgeMerge = true
 })
 
 func WithDescription(m map[string]string) ConstraintsOpt {

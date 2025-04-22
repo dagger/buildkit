@@ -287,6 +287,9 @@ func (s *scheduler) newRequestWithFunc(e *edge, f func(context.Context) (any, er
 
 // mergeTo merges the state from one edge to another. source edge is discarded.
 func (s *scheduler) mergeTo(target, src *edge) bool {
+	if target.edge.Vertex.Options().SkipEdgeMerge || src.edge.Vertex.Options().SkipEdgeMerge {
+		return false
+	}
 	if !target.edge.Vertex.Options().IgnoreCache && src.edge.Vertex.Options().IgnoreCache {
 		return false
 	}

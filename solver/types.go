@@ -56,6 +56,7 @@ type VertexOptions struct {
 	ExportCache  *bool
 	// WorkerConstraint
 	ProgressGroup *pb.ProgressGroup
+	SkipEdgeMerge bool
 }
 
 // Result is an abstract return value for a solve
