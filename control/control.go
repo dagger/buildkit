@@ -224,6 +224,7 @@ func (c *Controller) Prune(req *controlapi.PruneRequest, stream controlapi.Contr
 					All:           req.All,
 					KeepDuration:  time.Duration(req.KeepDuration),
 					ReservedSpace: req.ReservedSpace,
+					TargetSpace:   req.TargetSpace,
 					MaxUsedSpace:  req.MaxUsedSpace,
 					MinFreeSpace:  req.MinFreeSpace,
 				})
@@ -648,6 +649,7 @@ func toPBGCPolicy(in []client.PruneInfo) []*apitypes.GCPolicy {
 			Filters:       p.Filter,
 			KeepDuration:  int64(p.KeepDuration),
 			ReservedSpace: p.ReservedSpace,
+			TargetSpace:   p.TargetSpace,
 			MaxUsedSpace:  p.MaxUsedSpace,
 			MinFreeSpace:  p.MinFreeSpace,
 		})
