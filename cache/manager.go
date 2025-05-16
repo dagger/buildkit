@@ -1045,7 +1045,7 @@ func (cm *cacheManager) pruneOnce(ctx context.Context, ch chan client.UsageInfo,
 	}
 
 	totalSize := int64(0)
-	if opt.MaxUsedSpace != 0 || opt.ReservedSpace != 0 || opt.MinFreeSpace != 0 {
+	if opt.MaxUsedSpace != 0 || opt.ReservedSpace != 0 || opt.MinFreeSpace != 0 || opt.TargetSpace != 0 {
 		du, err := cm.DiskUsage(ctx, client.DiskUsageInfo{})
 		if err != nil {
 			return err
@@ -1078,7 +1078,7 @@ func (cm *cacheManager) pruneOnce(ctx context.Context, ch chan client.UsageInfo,
 
 func calculateKeepBytes(totalSize int64, dstat disk.DiskStat, opt client.PruneInfo) int64 {
 	// 0 values are special, and means we have no keep cap
-	if opt.MaxUsedSpace == 0 && opt.ReservedSpace == 0 && opt.MinFreeSpace == 0 {
+	if opt.MaxUsedSpace == 0 && opt.ReservedSpace == 0 && opt.MinFreeSpace == 0 && opt.TargetSpace == 0 {
 		return 0
 	}
 
@@ -1095,6 +1095,11 @@ func calculateKeepBytes(totalSize int64, dstat disk.DiskStat, opt client.PruneIn
 	} else if opt.MinFreeSpace != 0 && keepBytes == 0 {
 		// if only minFreeSpace is set and it doesn't match then we don't delete anything
 		keepBytes = totalSize
+	}
+
+	// if we are going to garbage collect, then make sure we apply the target
+	if opt.TargetSpace != 0 && keepBytes < totalSize {
+		keepBytes = min(keepBytes, opt.TargetSpace)
 	}
 
 	// but make sure we don't take the total below the reserved space

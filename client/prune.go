@@ -19,6 +19,7 @@ func (c *Client) Prune(ctx context.Context, ch chan UsageInfo, opts ...PruneOpti
 		Filter:        info.Filter,
 		KeepDuration:  int64(info.KeepDuration),
 		ReservedSpace: int64(info.ReservedSpace),
+		TargetSpace:   int64(info.TargetSpace),
 		MaxUsedSpace:  int64(info.MaxUsedSpace),
 		MinFreeSpace:  int64(info.MinFreeSpace),
 	}
@@ -67,6 +68,7 @@ type PruneInfo struct {
 
 	ReservedSpace int64 `json:"reservedSpace"`
 	MaxUsedSpace  int64 `json:"maxUsedSpace"`
+	TargetSpace   int64 `json:"targetSpace"`
 	MinFreeSpace  int64 `json:"minFreeSpace"`
 }
 

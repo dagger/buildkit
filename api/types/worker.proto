@@ -24,6 +24,7 @@ message GCPolicy {
 
 	// reservedSpace was renamed from freeBytes
 	int64 reservedSpace = 3 [(gogoproto.nullable) = true];
+	int64 targetSpace = 7 [(gogoproto.nullable) = true];
 	int64 maxUsedSpace = 5 [(gogoproto.nullable) = true];
 	int64 minFreeSpace = 6 [(gogoproto.nullable) = true];
 }
