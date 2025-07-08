@@ -90,7 +90,7 @@ type Worker struct {
 	WorkerOpt
 	CacheMgr        cache.Manager
 	SourceManager   *source.Manager
-	imageWriter     *imageexporter.ImageWriter
+	ImageWriter     *imageexporter.ImageWriter
 	ImageSource     *containerimage.Source
 	OCILayoutSource *containerimage.Source
 }
@@ -205,7 +205,7 @@ func NewWorker(ctx context.Context, opt WorkerOpt) (*Worker, error) {
 		WorkerOpt:       opt,
 		CacheMgr:        cm,
 		SourceManager:   sm,
-		imageWriter:     iw,
+		ImageWriter:     iw,
 		ImageSource:     is,
 		OCILayoutSource: os,
 	}, nil
@@ -446,7 +446,7 @@ func (w *Worker) Exporter(name string, sm *session.Manager) (exporter.Exporter, 
 		return imageexporter.New(imageexporter.Opt{
 			Images:         w.ImageStore,
 			SessionManager: sm,
-			ImageWriter:    w.imageWriter,
+			ImageWriter:    w.ImageWriter,
 			RegistryHosts:  w.RegistryHosts,
 			LeaseManager:   w.LeaseManager(),
 		})
@@ -461,14 +461,14 @@ func (w *Worker) Exporter(name string, sm *session.Manager) (exporter.Exporter, 
 	case client.ExporterOCI:
 		return ociexporter.New(ociexporter.Opt{
 			SessionManager: sm,
-			ImageWriter:    w.imageWriter,
+			ImageWriter:    w.ImageWriter,
 			Variant:        ociexporter.VariantOCI,
 			LeaseManager:   w.LeaseManager(),
 		})
 	case client.ExporterDocker:
 		return ociexporter.New(ociexporter.Opt{
 			SessionManager: sm,
-			ImageWriter:    w.imageWriter,
+			ImageWriter:    w.ImageWriter,
 			Variant:        ociexporter.VariantDocker,
 			LeaseManager:   w.LeaseManager(),
 		})
